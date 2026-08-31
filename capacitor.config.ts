@@ -76,8 +76,10 @@ const config: CapacitorConfig = {
   // Safari > Develop > [device name] > Tamm Store to see the *actual* console
   // error the reviews widget is throwing inside the app - that's the only
   // reliable way to fix this specific one instead of guessing again.
+  // ملحوظة: كنت مضيف هنا تعديل على هوية المتصفح (User-Agent) كمحاولة لحل مشكلة
+  // التقييمات، لكنه خلى القسم يختفي خالص بدل ما يظهر فاضي، يعني خلى الوضع أسوأ.
+  // شيلته خالص عشان نرجع لأقرب حالة مستقرة ونشوف الخطأ الحقيقي بدل ما نخمّن.
   ios: {
-    appendUserAgent: 'Version/17.0 Safari/604.1',
     webContentsDebuggingEnabled: true
   },
 
