@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2732 2732">
+  <rect width="2732" height="2732" fill="#0f172a"/>
+  <g transform="translate(1066,1000)" fill="none" stroke="#f5c451" stroke-width="46" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 100 150 L 100 40 a 200 200 0 0 1 400 0 l 0 110"/>
+    <rect x="20" y="150" width="560" height="440" rx="40" fill="#0f172a" stroke="#f5c451"/>
+  </g>
+  <text x="1366" y="1740" font-family="Arial, sans-serif" font-weight="700" font-size="150" fill="#ffffff" text-anchor="middle">TAMM STORE</text>
+</svg>

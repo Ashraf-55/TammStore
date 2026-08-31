@@ -1,0 +1,51 @@
+workflows:
+  ios-release:
+    name: Tamm Store - iOS Release
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: tamm_store_asc_key   # set this name when you connect your API key in Codemagic
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.tammstorekw.app
+      vars:
+        BUNDLE_ID: "com.tammstorekw.app"
+        XCODE_PROJECT: "ios/App/App.xcodeproj"
+        XCODE_SCHEME: "App"
+      node: latest
+      xcode: latest
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+    scripts:
+      - name: Install npm dependencies
+        script: npm install
+      - name: Sync Capacitor iOS
+        script: npx cap sync ios
+      - name: Set up code signing
+        script: |
+          xcode-project use-profiles
+      - name: Increment build number
+        script: |
+          cd ios/App
+          NEXT_BUILD_NUMBER=$(date +%s)
+          echo "Next build number will be: $NEXT_BUILD_NUMBER"
+          agvtool new-version -all $NEXT_BUILD_NUMBER
+      - name: Build .ipa
+        script: |
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME" \
+            --archive-flags="COMPILER_INDEX_STORE_ENABLE=NO"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        submit_to_app_store: false   # keep this false until you're ready to actually submit for review

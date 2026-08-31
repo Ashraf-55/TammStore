@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" rx="0" fill="#0f172a"/>
+  <circle cx="512" cy="470" r="300" fill="#1e293b"/>
+  <g fill="none" stroke="#f5c451" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 372 420 L 372 340 a 140 140 0 0 1 280 0 l 0 80"/>
+    <rect x="330" y="420" width="364" height="300" rx="28" fill="#0f172a" stroke="#f5c451"/>
+  </g>
+  <text x="512" y="880" font-family="Arial, sans-serif" font-weight="700" font-size="120" fill="#ffffff" text-anchor="middle">TAMM</text>
+</svg>
