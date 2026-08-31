@@ -21,7 +21,32 @@ const config: CapacitorConfig = {
       '*.shopifysvc.com',
       'checkout.shopify.com',
       'shop.app',
-      '*.shop.app'
+      '*.shop.app',
+      // Domains used by the "product reviews" widget (photo/video reviews,
+      // pagination, "view all reviews") so it can load its content and any
+      // full-screen/video expansion without getting blocked inside the app.
+      '*.judge.me',
+      'judge.me',
+      '*.loox.io',
+      'loox.io',
+      '*.okendo.io',
+      'okendo.io',
+      '*.stamped.io',
+      'stamped.io',
+      '*.yotpo.com',
+      'yotpo.com',
+      '*.reviews.io',
+      'reviews.io',
+      '*.vidjet.io',
+      'vidjet.io',
+      '*.vimeo.com',
+      'vimeo.com',
+      '*.vimeocdn.com',
+      'youtube.com',
+      '*.youtube.com',
+      'youtube-nocookie.com',
+      '*.youtube-nocookie.com',
+      '*.ytimg.com'
     ]
   },
 
@@ -36,6 +61,20 @@ const config: CapacitorConfig = {
       style: 'LIGHT',
       backgroundColor: '#ffffff'
     }
+  },
+
+  // Fix for "مراجعة منتجاتنا" (product reviews) not loading in the app:
+  // the reviews/video widget checks the browser's User-Agent, and Capacitor's
+  // WKWebView UA is missing the trailing "Safari/..." token that Mobile Safari
+  // always has. Some third-party widgets treat any UA without that token as an
+  // unsupported/embedded browser and refuse to render their video/photo content,
+  // even though the exact same page works fine when opened in real Safari.
+  // Appending it here makes the in-app browser identify itself exactly like
+  // Safari does, so the widget renders normally.
+  ios: {
+    appendUserAgent: 'Safari/604.1',
+    allowsLinkPreview: false,
+    contentInset: 'automatic'
   },
 
   android: {
