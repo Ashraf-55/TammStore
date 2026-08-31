@@ -71,10 +71,14 @@ const config: CapacitorConfig = {
   // even though the exact same page works fine when opened in real Safari.
   // Appending it here makes the in-app browser identify itself exactly like
   // Safari does, so the widget renders normally.
+  //
+  // webContentsDebuggingEnabled lets us plug the iPhone into a Mac and open
+  // Safari > Develop > [device name] > Tamm Store to see the *actual* console
+  // error the reviews widget is throwing inside the app - that's the only
+  // reliable way to fix this specific one instead of guessing again.
   ios: {
     appendUserAgent: 'Safari/604.1',
-    allowsLinkPreview: false,
-    contentInset: 'automatic'
+    webContentsDebuggingEnabled: true
   },
 
   android: {
