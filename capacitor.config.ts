@@ -77,7 +77,7 @@ const config: CapacitorConfig = {
   // error the reviews widget is throwing inside the app - that's the only
   // reliable way to fix this specific one instead of guessing again.
   ios: {
-    appendUserAgent: 'Safari/604.1',
+    appendUserAgent: 'Version/17.0 Safari/604.1',
     webContentsDebuggingEnabled: true
   },
 
