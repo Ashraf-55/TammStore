@@ -34,12 +34,15 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
         return allowedHosts.contains { host == $0 || host.hasSuffix("." + $0) }
     }
 
-    // The "مراجعة منتجاتنا" (product reviews) Vimeo video widget: wherever it shows up on the
-    // site (home page, product cards, etc.), a tap on it used to navigate to a vimeo.com URL,
-    // which — since vimeo isn't an allowedHost — fell into presentInAppBrowser() below and
-    // popped a full-screen in-app Safari sheet. That popup is exactly the "ad-like play thing"
-    // that needs to disappear, so vimeo hosts get a dedicated silent-cancel path instead of
-    // ever reaching presentInAppBrowser(), no matter which UI element on the page triggered it.
+    // The "مراجعة منتجاتنا" (product reviews) Vimeo video widget: a tap on it used to
+    // navigate to a vimeo.com URL as a *new window/tab*, which — since vimeo isn't an
+    // allowedHost — fell into presentInAppBrowser() below and popped a full-screen in-app
+    // Safari sheet on top of the app. That's the "ad-like play thing" popup that needed to
+    // go away. The widget itself, though, is just a normal <iframe src="https://vimeo.com/...">
+    // sitting inline in the page (same as it is in Safari) — so isBlockedHost is only ever
+    // consulted for *new-window* requests (createWebViewWith) and *main-frame* navigations
+    // below. Ordinary iframe loads are left alone entirely and never even reach this check,
+    // so the video loads and plays inline exactly like it does in Safari.
     private func isBlockedHost(_ host: String?) -> Bool {
         guard let host = host?.lowercased(), !host.isEmpty else { return false }
         return host.contains("vimeo.com") || host.contains("vimeocdn.com")
@@ -93,66 +96,6 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
         // Android's explicit opt-in and lets the WKUIDelegate methods below
         // actually receive the request.
         bridge?.webView?.configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
-
-        // Fix #3: the "مراجعة منتجاتنا" (product reviews) Vimeo video widget. Blocks its
-        // requests at the network level, silently cancels any navigation to it (see
-        // isBlockedHost usage in decidePolicyFor / createWebViewWith below — this is what
-        // actually stops the popup, network-blocking alone did not), and hides any leftover
-        // placeholder box via a few cheap injected JS passes.
-        installVimeoReviewWidgetBlock()
-    }
-
-    // MARK: - Vimeo "product reviews" widget removal
-
-    private func installVimeoReviewWidgetBlock() {
-        guard let controller = bridge?.webView?.configuration.userContentController else { return }
-
-        let hideWidgetJS = """
-        (function(){
-          function hideReviewsWidget(){
-            try{
-              document.querySelectorAll('iframe[src*="vimeo"]').forEach(function(f){
-                var el=f; for(var i=0;i<4 && el.parentElement;i++){ el=el.parentElement; }
-                el.style.display='none';
-              });
-              document.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(function(h){
-                var t=(h.textContent||'').trim();
-                if(t==='مراجعة منتجاتنا'){
-                  h.style.display='none';
-                  if(h.nextElementSibling){ h.nextElementSibling.style.display='none'; }
-                  var sec=h.closest('section,div[class*="section"]');
-                  if(sec){ sec.style.display='none'; }
-                }
-              });
-            }catch(e){}
-          }
-          // A handful of cheap one-off passes instead of a permanently-attached
-          // MutationObserver watching the whole document subtree: that observer was firing
-          // its (expensive, document-wide) query on every single DOM change anywhere on the
-          // page for the rest of the session — including on pages like Profile/Sign-in with
-          // lots of form/keyboard churn — which is very likely why those pages started
-          // feeling sluggish.
-          hideReviewsWidget();
-          document.addEventListener('DOMContentLoaded', hideReviewsWidget);
-          [300, 1000, 2500, 5000].forEach(function(ms){ setTimeout(hideReviewsWidget, ms); });
-        })();
-        """
-        let script = WKUserScript(source: hideWidgetJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-        controller.addUserScript(script)
-
-        let blockRuleJSON = """
-        [{ "trigger": { "url-filter": ".*vimeo.*" }, "action": { "type": "block" } }]
-        """
-        WKContentRuleListStore.default().compileContentRuleList(
-            forIdentifier: "TammBlockVimeoReviewsWidget",
-            encodedContentRuleList: blockRuleJSON
-        ) { ruleList, error in
-            guard let ruleList = ruleList, error == nil else {
-                os_log("Vimeo content-rule compile failed: %{public}@", log: navLog, type: .error, error?.localizedDescription ?? "unknown")
-                return
-            }
-            controller.add(ruleList)
-        }
     }
 
     // Re-apply the top inset if the safe area changes (e.g. rotation, or the
@@ -167,7 +110,7 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
         }
     }
 
-    // MARK: - Normal navigation (link taps, redirects, form posts)
+    // MARK: - Normal navigation (link taps, redirects, form posts, and iframe loads)
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url else {
@@ -176,7 +119,8 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
         }
 
         let scheme = url.scheme?.lowercased() ?? ""
-        os_log("decidePolicyFor: %{public}@ (host=%{public}@)", log: navLog, type: .debug, url.absoluteString, url.host ?? "nil")
+        let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+        os_log("decidePolicyFor: %{public}@ (host=%{public}@, mainFrame=%{public}@)", log: navLog, type: .debug, url.absoluteString, url.host ?? "nil", String(isMainFrame))
 
         // tel:, mailto:, whatsapp:, sms: etc. -> hand off to the native app that handles them.
         if !scheme.hasPrefix("http") {
@@ -192,10 +136,17 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
             return
         }
 
-        // Vimeo (the product-reviews video widget): cancel quietly, never pop the Safari sheet.
+        // Vimeo (the product-reviews video widget): only block it from hijacking the
+        // *whole page* (a top-level navigation actually leaving the app's site). An
+        // ordinary iframe load (isMainFrame == false) is the video widget rendering
+        // inline exactly like it does in Safari — let it through.
         if isBlockedHost(url.host) {
-            os_log("decidePolicyFor: silently blocking vimeo navigation: %{public}@", log: navLog, type: .debug, url.absoluteString)
-            decisionHandler(.cancel)
+            if isMainFrame {
+                os_log("decidePolicyFor: silently blocking a full-page vimeo hijack: %{public}@", log: navLog, type: .debug, url.absoluteString)
+                decisionHandler(.cancel)
+            } else {
+                decisionHandler(.allow)
+            }
             return
         }
 
@@ -204,9 +155,11 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
         presentInAppBrowser(url)
     }
 
-    // MARK: - New-window requests (target="_blank", window.open — this is how Shop Pay /
-    // customer-account sign-in normally tries to launch). We never create a second window;
-    // allowed URLs load right back in this same WebView instead, so sign-in stays in-app.
+    // MARK: - New-window requests (target="_blank", window.open). This only fires for
+    // requests that want a *separate* window/tab — never for iframe loads — so this is
+    // exactly where the old "ad-like popup" came from, and exactly where Vimeo still
+    // needs to be blocked. Allowed URLs load right back in this same WebView instead,
+    // so sign-in stays in-app.
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard let url = navigationAction.request.url else {
@@ -219,7 +172,7 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
         if isAllowed(url.host) {
             webView.load(navigationAction.request)
         } else if isBlockedHost(url.host) {
-            os_log("createWebViewWith: silently blocking vimeo new-window request: %{public}@", log: navLog, type: .debug, url.absoluteString)
+            os_log("createWebViewWith: silently blocking a vimeo popup window: %{public}@", log: navLog, type: .debug, url.absoluteString)
         } else {
             presentInAppBrowser(url)
         }
