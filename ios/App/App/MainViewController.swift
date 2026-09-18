@@ -33,7 +33,14 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
         // brand-new, signed-out SFSafariViewController — blank page, no delete-account
         // option, because that sheet doesn't share the app WebView's login session.
         // Allowing it keeps it inside the same authenticated WebView instead.
-        "shopifycdn.com"
+        "shopifycdn.com",
+        // Shop Pay's sign-in "Verify" step (the hCaptcha challenge shown right after
+        // tapping Continue on the Shop sign-in screen) opens via window.open() to
+        // hcaptcha.com. Not being in this list meant it fell into presentInAppBrowser()
+        // too — a blank pop-up Safari sheet on top of the sign-in screen that looked
+        // like an ad. Allowing it lets it load back into the same WebView instead,
+        // exactly like the rest of the Shop Pay sign-in flow already does.
+        "hcaptcha.com"
     ]
 
     private func isAllowed(_ host: String?) -> Bool {
