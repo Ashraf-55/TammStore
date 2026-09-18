@@ -25,6 +25,9 @@ const config: CapacitorConfig = {
       // Shopify's "Manage account" / delete-account customer-account UI extension.
       'shopifycdn.com',
       '*.shopifycdn.com',
+      // Shop Pay sign-in's "Verify" (hCaptcha) step.
+      'hcaptcha.com',
+      '*.hcaptcha.com',
       // Domains used by the "product reviews" widget (photo/video reviews,
       // pagination, "view all reviews") so it can load its content and any
       // full-screen/video expansion without getting blocked inside the app.
