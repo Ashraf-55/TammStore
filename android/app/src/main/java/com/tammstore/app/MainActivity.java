@@ -24,7 +24,11 @@ public class MainActivity extends BridgeActivity {
         "shopify.com",
         "shopifycs.com",
         "shopifysvc.com",
-        "shop.app"
+        "shop.app",
+        // The "Manage account" / delete-account page (Shopify's new Customer Account
+        // UI extension) is served from extensions.shopifycdn.com — see the matching
+        // comment in ios/App/App/MainViewController.swift for why this was missing.
+        "shopifycdn.com"
     };
 
     private static boolean isAllowedHost(String host) {
