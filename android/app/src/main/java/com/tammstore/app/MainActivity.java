@@ -28,7 +28,10 @@ public class MainActivity extends BridgeActivity {
         // The "Manage account" / delete-account page (Shopify's new Customer Account
         // UI extension) is served from extensions.shopifycdn.com — see the matching
         // comment in ios/App/App/MainViewController.swift for why this was missing.
-        "shopifycdn.com"
+        "shopifycdn.com",
+        // Shop Pay's sign-in "Verify" step (hCaptcha challenge) — same story as
+        // shopifycdn.com above, see the matching comment on iOS for details.
+        "hcaptcha.com"
     };
 
     private static boolean isAllowedHost(String host) {
