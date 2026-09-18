@@ -26,7 +26,14 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
         "shopifycs.com",
         "shopifysvc.com",
         "shopifysvc.net",
-        "shop.app"
+        "shop.app",
+        // The "Manage account" / delete-account page (Shopify's new Customer Account
+        // UI extension) is served from extensions.shopifycdn.com. It wasn't in this
+        // list, so tapping it fell through to presentInAppBrowser() and opened a
+        // brand-new, signed-out SFSafariViewController — blank page, no delete-account
+        // option, because that sheet doesn't share the app WebView's login session.
+        // Allowing it keeps it inside the same authenticated WebView instead.
+        "shopifycdn.com"
     ]
 
     private func isAllowed(_ host: String?) -> Bool {
