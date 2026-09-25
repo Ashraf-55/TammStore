@@ -9,7 +9,7 @@ private let navLog = OSLog(subsystem: "com.tammstorekw.app", category: "Navigati
 
 // TODO: replace with your real Vercel deployment URL once it's live, e.g.
 // "https://tamm-store-apple-signin.vercel.app/api/apple-signin"
-private let appleSignInBackendURL = URL(string: "https://REPLACE-ME.vercel.app/api/apple-signin")!
+private let appleSignInBackendURL = URL(string: "https://tamm-store-login-9lva.vercel.app/api/apple-signin")!
 
 // Hosts where the Shop sign-in screen actually lives — this is where we
 // surface the native "Sign in with Apple" button as the equivalent option
