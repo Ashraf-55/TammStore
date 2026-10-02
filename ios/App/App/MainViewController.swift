@@ -66,7 +66,7 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
     // delegate methods below actually get called by the WebView.
 
     // iOS-only: visually hides the Shopify "Continue with shop" sign-in button
-    // inside the WebView (App Store Guideline 4.8 — the app's own email+code
+    // (plus the "or" divider and "create account" subtitle) inside the WebView (App Store Guideline 4.8 — the app's own email+code
     // option on the Shopify account screen is the login method now).
     //
     // Why the first version didn't work (button stayed visible):
@@ -145,9 +145,38 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
         el.style.setProperty('display', 'none', 'important');
       }
 
+      // Login-page cleanup (only on a page that has an email field, so the rest of the
+      // store is never touched): hide the "Sign in or create account" subtitle and the
+      // "or" divider that separated the removed Shop button from the email field.
+      var SUBTITLE_RE = /^(تسجيل الدخول\s*أو\s*(إنشاء|انشاء)\s*حساب|sign in or create (an )?account|log in or create (an )?account)$/i;
+      var OR_RE = /^(أو|او|or)$/i;
+      var EMAIL_SEL = 'input[type="email"], input[autocomplete*="email" i], input[name*="email" i], ' +
+                      'input[placeholder*="email" i], input[placeholder*="بريد"], input[aria-label*="بريد"], input[aria-label*="email" i]';
+
+      function hideLoginExtras(root) {
+        try {
+          if (!root.querySelector(EMAIL_SEL)) return;
+          var nodes = root.querySelectorAll('*');
+          for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            if (el.children.length !== 0 || el.hasAttribute(MARK)) continue;
+            var t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!t || t.length > 40) continue;
+            if (SUBTITLE_RE.test(t)) {
+              hide(el);
+            } else if (OR_RE.test(t)) {
+              var par = el.parentElement;
+              var pt = par ? (par.textContent || '').replace(/\s+/g, ' ').trim() : '';
+              hide(par && OR_RE.test(pt) ? par : el);
+            }
+          }
+        } catch (e) {}
+      }
+
       var SELECTOR = 'button, a, [role="button"], [tabindex], input[type="submit"], input[type="button"]';
 
       function scan(root) {
+        hideLoginExtras(root);
         try {
           var nodes = root.querySelectorAll('*');
           for (var i = 0; i < nodes.length; i++) {
