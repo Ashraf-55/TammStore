@@ -67,37 +67,126 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
 
     // iOS-only: visually hides the Shopify "Continue with shop" sign-in button
     // inside the WebView (App Store Guideline 4.8 — the app's own email+code
-    // screen, shown before this WebView ever loads, is the login method now).
-    // Pure CSS/JS injection, scoped to this one button by its visible text —
-    // doesn't touch any other element, any other page, or the Android app.
-    // If Shopify ever changes that button's text, this simply stops matching
-    // and the button reappears; nothing else breaks.
-    private static let hideShopButtonScript: WKUserScript = {
-        let js = """
-        (function() {
-          function hideShopButton() {
-            try {
-              var all = document.querySelectorAll('button, a, [role="button"]');
-              for (var i = 0; i < all.length; i++) {
-                var el = all[i];
-                var text = (el.textContent || '').trim().toLowerCase();
-                if (text.indexOf('continue with shop') !== -1) {
-                  el.style.setProperty('display', 'none', 'important');
-                  el.setAttribute('aria-hidden', 'true');
-                }
-              }
-            } catch (e) {}
+    // option on the Shopify account screen is the login method now).
+    //
+    // Why the first version didn't work (button stayed visible):
+    //  1. It matched only on the element's text ("continue with shop"). On Shopify's
+    //     login page the "shop" part is usually a logo (SVG/img), not text, so the text
+    //     is just "Continue with" and the match silently failed.
+    //  2. It ran once at DOMContentLoaded + a MutationObserver attached at document
+    //     start, when <html> may not exist yet (the observer then throws and the
+    //     try/catch swallows it). The login form is rendered later by JS, so a single
+    //     early pass never sees the button.
+    //
+    // This version: matches on text OR aria-label / alt / svg <title> / href, looks inside
+    // open shadow roots, waits for <html>, re-scans on DOM changes + on a short timer,
+    // and hides through a CSS rule on a marker attribute so a re-render can't undo it.
+    // NOTE: this is a Swift *raw* string (#"""..."""#) so JS backslashes like \s stay literal.
+    private static let hideShopButtonJS: String = #"""
+    (function () {
+      if (window.__tammHideShop) return;
+      window.__tammHideShop = true;
+
+      var MARK = 'data-tamm-hidden';
+      var TEXT_RE = /continue\s*with\s*shop|(?:متابعة|المتابعة|تابع|استمر|الاستمرار)\s*(?:مع|ب|باستخدام|بواسطة)?\s*shop/i;
+      var CONTINUE_RE = /continue\s*with|متابعة|المتابعة/i;
+      var SHOP_RE = /(^|[^a-z])shop([^a-z]|$)/i;
+      var BADGE_RE = /آخر\s*استخدام|last\s*used/gi;
+
+      // Shopify's login widget may use a *closed* shadow root, which querySelectorAll can't
+      // see into. Force new shadow roots to be open so the scan below can reach them.
+      try {
+        var _attach = Element.prototype.attachShadow;
+        Element.prototype.attachShadow = function (init) {
+          return _attach.call(this, Object.assign({}, init, { mode: 'open' }));
+        };
+      } catch (e) {}
+
+      function addStyle() {
+        try {
+          if (document.getElementById('tamm-hide-shop-style')) return;
+          var st = document.createElement('style');
+          st.id = 'tamm-hide-shop-style';
+          st.textContent = '[' + MARK + ']{display:none !important;visibility:hidden !important;}';
+          (document.head || document.documentElement).appendChild(st);
+        } catch (e) {}
+      }
+
+      function collectLabel(el) {
+        var parts = [el.innerText, el.textContent,
+                     el.getAttribute('aria-label'), el.getAttribute('title'),
+                     el.getAttribute('value')];
+        try {
+          var inner = el.querySelectorAll('img[alt], svg[aria-label], [aria-label], svg title');
+          for (var i = 0; i < inner.length; i++) {
+            parts.push(inner[i].getAttribute('alt'), inner[i].getAttribute('aria-label'), inner[i].textContent);
           }
-          hideShopButton();
-          try {
-            var observer = new MutationObserver(hideShopButton);
-            observer.observe(document.documentElement, { childList: true, subtree: true });
-          } catch (e) {}
-          document.addEventListener('DOMContentLoaded', hideShopButton);
-        })();
-        """
-        return WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-    }()
+        } catch (e) {}
+        return parts.join(' ').replace(/\s+/g, ' ').trim();
+      }
+
+      function isShopButton(el) {
+        var label = collectLabel(el);
+        if (!label) return false;
+        if (TEXT_RE.test(label)) return true;
+        // The button carries a small "last used" badge (آخر استخدام) and the word "shop" is
+        // a logo with no text, so after removing the badge the label is just "Continue with".
+        var bare = label.replace(BADGE_RE, '').replace(/\s+/g, ' ').trim();
+        if (bare.length < 40 && /^(continue with|متابعة مع|المتابعة مع|تابع مع|المتابعة باستخدام|متابعة باستخدام)$/i.test(bare)) return true;
+        // "Continue with" + a "shop" logo (svg/img/aria-label) — short labels only,
+        // so a big container that merely contains both words is never matched.
+        return label.length < 60 && CONTINUE_RE.test(label) && SHOP_RE.test(label);
+      }
+
+      function hide(el) {
+        el.setAttribute(MARK, '1');
+        el.setAttribute('aria-hidden', 'true');
+        el.setAttribute('tabindex', '-1');
+        el.style.setProperty('display', 'none', 'important');
+      }
+
+      var SELECTOR = 'button, a, [role="button"], [tabindex], input[type="submit"], input[type="button"]';
+
+      function scan(root) {
+        try {
+          var nodes = root.querySelectorAll('*');
+          for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            if (el.shadowRoot) scan(el.shadowRoot);
+            if (el.hasAttribute && el.hasAttribute(MARK)) continue;
+            if (el.matches && el.matches(SELECTOR) && isShopButton(el)) hide(el);
+          }
+        } catch (e) {}
+      }
+
+      var pending = false;
+      function schedule() {
+        if (pending) return;
+        pending = true;
+        setTimeout(function () { pending = false; addStyle(); scan(document); }, 50);
+      }
+
+      function observe() {
+        try {
+          if (!document.documentElement) { setTimeout(observe, 20); return; }
+          new MutationObserver(schedule).observe(document.documentElement,
+            { childList: true, subtree: true });
+        } catch (e) {}
+      }
+
+      observe();
+      schedule();
+      document.addEventListener('DOMContentLoaded', schedule);
+      window.addEventListener('load', schedule);
+      window.addEventListener('pageshow', schedule);
+      // Safety net: the login form is rendered by JS a moment after load.
+      var ticks = 0;
+      var timer = setInterval(function () { schedule(); if (++ticks > 60) clearInterval(timer); }, 500);
+    })();
+    """#
+
+    private static let hideShopButtonScript: WKUserScript =
+        WKUserScript(source: hideShopButtonJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
 
     override func capacitorDidLoad() {
         super.capacitorDidLoad()
@@ -202,6 +291,12 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
         // Anything else: open inside an in-app browser sheet so the user never leaves the app.
         decisionHandler(.cancel)
         presentInAppBrowser(url)
+    }
+
+    // Safety net: if the injected user script didn't run for some reason, run the same
+    // (idempotent) script again once each page finishes loading.
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        webView.evaluateJavaScript(Self.hideShopButtonJS, completionHandler: nil)
     }
 
     // MARK: - New-window requests (target="_blank", window.open). This only fires for
