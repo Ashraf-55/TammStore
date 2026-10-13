@@ -2,6 +2,7 @@ import UIKit
 import WebKit
 import Capacitor
 import SafariServices
+import AppTrackingTransparency
 import os.log
 
 private let navLog = OSLog(subsystem: "com.tammstorekw.app", category: "Navigation")
@@ -40,7 +41,9 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
         // too — a blank pop-up Safari sheet on top of the sign-in screen that looked
         // like an ad. Allowing it lets it load back into the same WebView instead,
         // exactly like the rest of the Shop Pay sign-in flow already does.
-        "hcaptcha.com"
+        "hcaptcha.com",
+        // Bot-protection challenge frames used during sign-in / checkout.
+        "cloudflare.com"
     ]
 
     private func isAllowed(_ host: String?) -> Bool {
@@ -217,11 +220,291 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
     private static let hideShopButtonScript: WKUserScript =
         WKUserScript(source: hideShopButtonJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
 
+
+    // MARK: - Guideline 5.1.2(i) — App Tracking Transparency
+    //
+    // Apple's finding: the WebView loads a site that sets tracking cookies/pixels, but the
+    // app never asked for ATT permission. What we do now:
+    //   1. Until the user explicitly taps "Allow" on the system ATT prompt, every known
+    //      third-party tracking / advertising domain is blocked inside the WebView
+    //      (WKContentRuleList) and Shopify's Customer Privacy API is told "no consent".
+    //   2. The ATT prompt itself is shown once, right after the first screen appears
+    //      (MainViewController.viewDidAppear -> requestTrackingPermissionIfNeeded()).
+    //   3. If the user taps "Allow", the blocklist is removed and the page reloads. If they
+    //      deny (or tracking is restricted), the blocklist stays in place permanently.
+    // Review Notes text for App Store Connect lives in REVIEW_NOTES.md.
+
+    private static let trackerRulesID = "tamm.tracker.blocklist.v1"
+
+    /// Third-party tracking / ad-tech hosts blocked unless the user allowed tracking.
+    private static let trackerHostPatterns: [String] = [
+        #"connect\.facebook\.net"#,
+        #"facebook\.com/tr"#,
+        #"analytics\.tiktok\.com"#,
+        #"analytics-sg\.tiktok\.com"#,
+        #"business-api\.tiktok\.com"#,
+        #"google-analytics\.com"#,
+        #"analytics\.google\.com"#,
+        #"googleadservices\.com"#,
+        #"googlesyndication\.com"#,
+        #"doubleclick\.net"#,
+        #"googletagmanager\.com/(gtm|gtag)"#,
+        #"snap\.licdn\.com"#,
+        #"px\.ads\.linkedin\.com"#,
+        #"ct\.pinterest\.com"#,
+        #"s\.pinimg\.com/ct"#,
+        #"sc-static\.net"#,
+        #"tr\.snapchat\.com"#,
+        #"bat\.bing\.com"#,
+        #"clarity\.ms"#,
+        #"static\.hotjar\.com"#,
+        #"script\.hotjar\.com"#,
+        #"analytics\.twitter\.com"#,
+        #"static\.ads-twitter\.com"#,
+        #"criteo\.(com|net)"#,
+        #"taboola\.com"#,
+        #"outbrain\.com"#,
+        #"adsrvr\.org"#,
+        #"appsflyer\.com"#,
+        #"adjust\.com"#
+    ]
+
+    private var trackingAuthorized: Bool {
+        ATTrackingManager.trackingAuthorizationStatus == .authorized
+    }
+
+    private var trackerRulesList: WKContentRuleList?
+    private var privacyScriptInstalled = false
+    private var attRequestScheduled = false
+
+    private static var trackerRulesJSON: String {
+        let rules: [[String: Any]] = trackerHostPatterns.map { host in
+            [
+                "trigger": ["url-filter": "^https?://([^/]+\\.)?" + host],
+                "action": ["type": "block"]
+            ]
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: rules),
+              let json = String(data: data, encoding: .utf8) else { return "[]" }
+        return json
+    }
+
+    /// Runs inside the page when tracking is NOT authorized: tells Shopify's Customer Privacy
+    /// API that analytics/marketing/sale-of-data consent is denied. Everything happens inside
+    /// timers and checks window.__tammTrackingAllowed, which is set by a second script that
+    /// is added after the user taps "Allow" (user scripts can't be removed individually).
+    private static let denyTrackingJS: String = #"""
+    (function () {
+      if (window.__tammDenyTracking) return;
+      window.__tammDenyTracking = true;
+      var tries = 0;
+      function apply() {
+        if (window.__tammTrackingAllowed === true) return true;
+        try {
+          var cp = window.Shopify && window.Shopify.customerPrivacy;
+          if (cp && typeof cp.setTrackingConsent === 'function') {
+            cp.setTrackingConsent({ analytics: false, marketing: false, preferences: false, sale_of_data: false }, function () {});
+            return true;
+          }
+          if (window.Shopify && typeof window.Shopify.loadFeatures === 'function' && !window.__tammLoadingPrivacy) {
+            window.__tammLoadingPrivacy = true;
+            window.Shopify.loadFeatures([{ name: 'consent-tracking-api', version: '0.1' }], function () { window.__tammLoadingPrivacy = false; });
+          }
+        } catch (e) {}
+        return false;
+      }
+      var t = setInterval(function () { if (apply() || ++tries > 40) clearInterval(t); }, 500);
+    })();
+    """#
+
+    private static let allowTrackingJS = "window.__tammTrackingAllowed = true;"
+
+    /// Applies the correct tracking policy for the current ATT status. Safe to call repeatedly.
+    private func applyTrackingPolicy(reloadIfChanged: Bool) {
+        guard let webView = bridge?.webView else { return }
+        let ucc = webView.configuration.userContentController
+
+        if trackingAuthorized {
+            if let list = trackerRulesList {
+                ucc.remove(list)
+                trackerRulesList = nil
+            }
+            if privacyScriptInstalled {
+                // Order matters only loosely: the deny script re-checks the flag inside timers.
+                ucc.addUserScript(WKUserScript(source: Self.allowTrackingJS, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+                privacyScriptInstalled = false
+            }
+            if reloadIfChanged { webView.reload() }
+            return
+        }
+
+        // Not authorized (not determined yet, denied or restricted): block trackers.
+        if !privacyScriptInstalled {
+            ucc.addUserScript(WKUserScript(source: Self.denyTrackingJS, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+            privacyScriptInstalled = true
+        }
+        if trackerRulesList == nil {
+            WKContentRuleListStore.default().compileContentRuleList(forIdentifier: Self.trackerRulesID, encodedContentRuleList: Self.trackerRulesJSON) { [weak self] list, error in
+                DispatchQueue.main.async {
+                    guard let self = self, let list = list, self.trackerRulesList == nil, !self.trackingAuthorized else {
+                        if let error = error { os_log("tracker rules failed: %{public}@", log: navLog, type: .error, String(describing: error)) }
+                        return
+                    }
+                    self.trackerRulesList = list
+                    self.bridge?.webView?.configuration.userContentController.add(list)
+                    // Pages that began loading before the rules compiled may already have fired
+                    // a pixel — reload once so the first paint is tracker-free.
+                    if reloadIfChanged { self.bridge?.webView?.reload() }
+                }
+            }
+        }
+    }
+
+    /// Shows the system ATT prompt exactly once (status .notDetermined), only while the app is
+    /// active — iOS silently ignores the request otherwise.
+    private func requestTrackingPermissionIfNeeded() {
+        guard ATTrackingManager.trackingAuthorizationStatus == .notDetermined, !attRequestScheduled else { return }
+        attRequestScheduled = true
+
+        let present = { [weak self] in
+            // Small delay so the prompt appears over a fully drawn first screen.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                ATTrackingManager.requestTrackingAuthorization { _ in
+                    DispatchQueue.main.async { self?.applyTrackingPolicy(reloadIfChanged: true) }
+                }
+            }
+        }
+
+        if UIApplication.shared.applicationState == .active {
+            present()
+        } else {
+            var token: NSObjectProtocol?
+            token = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+                if let token = token { NotificationCenter.default.removeObserver(token) }
+                present()
+            }
+        }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        requestTrackingPermissionIfNeeded()
+    }
+
+    // MARK: - Guideline 2.3.10 — keep the iOS app focused on Apple's platform
+    //
+    // Apple's finding: the app (a) shows content/products for non-Apple platforms and
+    // (b) the metadata mentions third-party platforms. The metadata part must be fixed in
+    // App Store Connect (see REVIEW_NOTES.md). For what the WebView itself displays, this
+    // script — iOS only — removes store badges / links / mentions of other mobile platforms
+    // and hides product cards whose name matches a non-Apple device brand.
+    // EDIT the two lists below to match your catalog.
+    private static let platformTerms: [String] = [
+        "google play", "play store", "play.google.com", "appgallery", "app gallery",
+        "android", "اندرويد", "أندرويد", "جوجل بلاي", "متجر بلاي", "هواوي جاليري"
+    ]
+
+    private static let nonAppleProductTerms: [String] = [
+        "samsung", "galaxy", "xiaomi", "redmi", "poco phone", "huawei", "honor", "oppo", "realme",
+        "oneplus", "google pixel", "nokia", "infinix", "tecno", "motorola", "sony xperia",
+        "سامسونج", "سامسونغ", "جالكسي", "شاومي", "هواوي", "اوبو", "أوبو", "ريلمي", "ون بلس", "ونبلس", "جوجل بيكسل"
+    ]
+
+    private static var applePlatformFocusJS: String {
+        func jsArray(_ a: [String]) -> String {
+            let data = (try? JSONSerialization.data(withJSONObject: a)) ?? Data("[]".utf8)
+            return String(data: data, encoding: .utf8) ?? "[]"
+        }
+        return #"""
+        (function () {
+          if (window.__tammApplePlatformFocus) return;
+          window.__tammApplePlatformFocus = true;
+          var MARK = 'data-tamm-platform-hidden';
+          var PLATFORM = \#(jsArray(platformTerms));
+          var PRODUCTS = \#(jsArray(nonAppleProductTerms));
+          function esc(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+          var PLATFORM_RE = new RegExp(PLATFORM.map(esc).join('|'), 'i');
+          var PRODUCT_RE = new RegExp(PRODUCTS.map(esc).join('|'), 'i');
+          var CARD_SEL = 'li, article, .grid__item, [class*="product-card"], [class*="card-wrapper"], [class*="product-item"], [class*="productitem"]';
+
+          function hide(el) {
+            if (!el || el.hasAttribute(MARK)) return;
+            el.setAttribute(MARK, '1');
+            el.style.setProperty('display', 'none', 'important');
+          }
+
+          function cardFor(a) {
+            var el = a.closest(CARD_SEL);
+            if (!el) return null;
+            // Safety: never hide a big container that holds many different products.
+            var hrefs = {};
+            var links = el.querySelectorAll('a[href*="/products/"]');
+            for (var i = 0; i < links.length; i++) hrefs[links[i].getAttribute('href').split('?')[0]] = 1;
+            return Object.keys(hrefs).length <= 2 ? el : null;
+          }
+
+          function scan() {
+            try {
+              // 1) other platforms' store badges / links / short mentions
+              var badges = document.querySelectorAll('a[href*="play.google.com"], a[href*="appgallery"], a[href*="apps.microsoft.com"], img[alt], svg[aria-label], a[aria-label]');
+              for (var i = 0; i < badges.length; i++) {
+                var b = badges[i];
+                var label = (b.getAttribute('alt') || b.getAttribute('aria-label') || b.getAttribute('href') || '');
+                if (PLATFORM_RE.test(label) && label.length < 80) hide(b.closest('a') || b);
+              }
+              var leaves = document.querySelectorAll('a, button, li, span, p');
+              for (var j = 0; j < leaves.length; j++) {
+                var el = leaves[j];
+                if (el.hasAttribute(MARK) || el.children.length > 3) continue;
+                var t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+                if (t && t.length < 50 && PLATFORM_RE.test(t) && !el.closest('a[href*="/products/"]')) hide(el);
+              }
+              // 2) product cards for non-Apple device brands
+              var prodLinks = document.querySelectorAll('a[href*="/products/"]');
+              for (var k = 0; k < prodLinks.length; k++) {
+                var a = prodLinks[k];
+                var name = (a.textContent || '') + ' ' + (a.getAttribute('aria-label') || '') + ' ' + (a.getAttribute('href') || '');
+                var img = a.querySelector('img[alt]');
+                if (img) name += ' ' + img.getAttribute('alt');
+                if (PRODUCT_RE.test(name)) { var card = cardFor(a); if (card) hide(card); }
+              }
+              // 3) product page of a non-Apple device opened directly -> back to the store home
+              if (/\/products\//.test(location.pathname)) {
+                var h1 = document.querySelector('h1');
+                if (h1 && PRODUCT_RE.test(h1.textContent || '')) location.replace('/');
+              }
+            } catch (e) {}
+          }
+
+          var pending = false;
+          function schedule() { if (pending) return; pending = true; setTimeout(function () { pending = false; scan(); }, 80); }
+          function observe() {
+            try {
+              if (!document.documentElement) { setTimeout(observe, 20); return; }
+              new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+            } catch (e) {}
+          }
+          observe(); schedule();
+          document.addEventListener('DOMContentLoaded', schedule);
+          window.addEventListener('load', schedule);
+          var ticks = 0, timer = setInterval(function () { schedule(); if (++ticks > 40) clearInterval(timer); }, 750);
+        })();
+        """#
+    }
+
+    private static var applePlatformFocusScript: WKUserScript {
+        WKUserScript(source: applePlatformFocusJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+    }
+
     override func capacitorDidLoad() {
         super.capacitorDidLoad()
         bridge?.webView?.navigationDelegate = self
         bridge?.webView?.uiDelegate = self
         bridge?.webView?.configuration.userContentController.addUserScript(Self.hideShopButtonScript)
+        // 2.3.10: keep the in-app content focused on Apple's platform.
+        bridge?.webView?.configuration.userContentController.addUserScript(Self.applePlatformFocusScript)
+        // 5.1.2(i): block trackers until the user allows tracking via the ATT prompt.
+        applyTrackingPolicy(reloadIfChanged: true)
 
         // Fix #1: Kill the brief black flash between the Launch Screen and the
         // site's content finishing its load. WKWebView (and its internal
@@ -299,6 +582,16 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
         }
 
         if isAllowed(url.host) {
+            decisionHandler(.allow)
+            return
+        }
+
+        // Embedded frames (hCaptcha / bot-check / Shop sign-in / review widgets) must load
+        // inline. Previously a sub-frame on an unlisted host was cancelled and replaced by a
+        // popup Safari sheet — which can silently break the sign-in "send code" step
+        // (App Review 2.1(a): "we did not receive an OTP code"). Tracker hosts are still
+        // blocked separately by the content rule list above.
+        if !isMainFrame {
             decisionHandler(.allow)
             return
         }

@@ -53,6 +53,15 @@ Shopify order webhooks is usually the highest-value, lowest-effort option.
    third-party account (Google, Facebook), Apple requires you to also offer Sign in with
    Apple. Worth checking your Shopify customer-account settings.
 
+## iOS App Review fixes (Oct 13, 2026 rejection)
+
+See **REVIEW_NOTES.md** for the full pack. Summary of code changes:
+- 5.1.2(i): ATT prompt (`NSUserTrackingUsageDescription` + `MainViewController.requestTrackingPermissionIfNeeded()`),
+  tracker domains blocked in the WebView until the user allows tracking.
+- 2.1(a): sub-frames (captcha / challenge / sign-in widgets) always load inline; demo mailbox instructions for Review Notes.
+- 2.3.10: iOS-only script hides other-platform badges/mentions and non-Apple product cards
+  (edit `platformTerms` / `nonAppleProductTerms` in `MainViewController.swift`); metadata + screenshots must be cleaned in App Store Connect.
+
 ---
 
 ## Before your first release build — generate your signing key

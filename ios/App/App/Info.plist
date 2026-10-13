@@ -24,6 +24,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSUserTrackingUsageDescription</key>
+	<string>نستخدم هذا الإذن لتخصيص الإعلانات وقياس أداء الحملات. يمكنك رفضه وسيعمل التطبيق بشكل كامل بدون تتبع. / We use this permission to personalize ads and measure campaigns. You can decline and the app works fully without tracking.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
@@ -51,7 +53,7 @@
 	<string>Main</string>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
-		<string>armv7</string>
+		<string>arm64</string>
 	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
