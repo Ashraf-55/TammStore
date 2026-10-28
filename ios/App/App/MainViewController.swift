@@ -399,6 +399,11 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
     // script — iOS only — removes store badges / links / mentions of other mobile platforms
     // and hides product cards whose name matches a non-Apple device brand.
     // EDIT the two lists below to match your catalog.
+    /// MASTER SWITCH for product hiding.
+    ///  true  = hide product cards of non-Apple device brands (safest for Guideline 2.3.10, fewer sales in the iOS app)
+    ///  false = show ALL products (full catalog). Other-platform badges/mentions (Android / Google Play) are still hidden.
+    private static let hideNonAppleProducts = false
+
     private static let platformTerms: [String] = [
         "google play", "play store", "play.google.com", "appgallery", "app gallery",
         "android", "اندرويد", "أندرويد", "جوجل بلاي", "متجر بلاي", "هواوي جاليري"
@@ -421,10 +426,10 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
           window.__tammApplePlatformFocus = true;
           var MARK = 'data-tamm-platform-hidden';
           var PLATFORM = \#(jsArray(platformTerms));
-          var PRODUCTS = \#(jsArray(nonAppleProductTerms));
+          var PRODUCTS = \#(jsArray(hideNonAppleProducts ? nonAppleProductTerms : []));
           function esc(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
           var PLATFORM_RE = new RegExp(PLATFORM.map(esc).join('|'), 'i');
-          var PRODUCT_RE = new RegExp(PRODUCTS.map(esc).join('|'), 'i');
+          var PRODUCT_RE = PRODUCTS.length ? new RegExp(PRODUCTS.map(esc).join('|'), 'i') : null;
           var CARD_SEL = 'li, article, .grid__item, [class*="product-card"], [class*="card-wrapper"], [class*="product-item"], [class*="productitem"]';
 
           function hide(el) {
@@ -460,18 +465,18 @@ class MainViewController: CAPBridgeViewController, WKNavigationDelegate, WKUIDel
                 if (t && t.length < 50 && PLATFORM_RE.test(t) && !el.closest('a[href*="/products/"]')) hide(el);
               }
               // 2) product cards for non-Apple device brands
-              var prodLinks = document.querySelectorAll('a[href*="/products/"]');
+              var prodLinks = PRODUCT_RE ? document.querySelectorAll('a[href*="/products/"]') : [];
               for (var k = 0; k < prodLinks.length; k++) {
                 var a = prodLinks[k];
                 var name = (a.textContent || '') + ' ' + (a.getAttribute('aria-label') || '') + ' ' + (a.getAttribute('href') || '');
                 var img = a.querySelector('img[alt]');
                 if (img) name += ' ' + img.getAttribute('alt');
-                if (PRODUCT_RE.test(name)) { var card = cardFor(a); if (card) hide(card); }
+                if (PRODUCT_RE && PRODUCT_RE.test(name)) { var card = cardFor(a); if (card) hide(card); }
               }
               // 3) product page of a non-Apple device opened directly -> back to the store home
               if (/\/products\//.test(location.pathname)) {
                 var h1 = document.querySelector('h1');
-                if (h1 && PRODUCT_RE.test(h1.textContent || '')) location.replace('/');
+                if (PRODUCT_RE && h1 && PRODUCT_RE.test(h1.textContent || '')) location.replace('/');
               }
             } catch (e) {}
           }
